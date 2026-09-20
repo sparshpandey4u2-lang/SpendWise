@@ -657,12 +657,35 @@ function App() {
       return
     }
 
-    setTransactions((transactionInsert.data ?? []).map(row => ({
-      id: row.id, name: row.title, category: row.category, date: row.date, amount: Number(row.amount), type: row.type as TransactionType,
-    })))
-    setBudgets((budgetInsert.data ?? []).map(row => ({
-      id: row.id, category: row.category, amount: Number(row.amount),
-    })))
+    const transactionRows = (transactionInsert.data ?? []) as unknown as Array<{
+  id: string
+  title: string
+  category: string
+  date: string
+  amount: number | string
+  type: TransactionType
+}>
+
+const budgetRows = (budgetInsert.data ?? []) as unknown as Array<{
+  id: string
+  category: string
+  amount: number | string
+}>
+
+setTransactions(transactionRows.map(row => ({
+  id: row.id,
+  name: row.title,
+  category: row.category,
+  date: row.date,
+  amount: Number(row.amount),
+  type: row.type,
+})))
+
+setBudgets(budgetRows.map(row => ({
+  id: row.id,
+  category: row.category,
+  amount: Number(row.amount),
+})))
     if (goalInsert.data) {
       setGoal({ id: goalInsert.data.id, name: goalInsert.data.name, target: Number(goalInsert.data.target), saved: Number(goalInsert.data.saved) })
     }
