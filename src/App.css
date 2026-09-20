@@ -896,3 +896,125 @@ select:focus {
     flex-wrap: wrap;
   }
 }
+.auth-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-button {
+  border: none;
+  border-radius: 8px;
+  padding: 9px 15px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-button.primary {
+  background: #111827;
+  color: white;
+}
+
+.auth-button.secondary {
+  background: #f3f4f6;
+  color: #111827;
+}
+.auth-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-button {
+  border: none;
+  border-radius: 8px;
+  padding: 9px 15px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-button.primary {
+  background: #111827;
+  color: white;
+}
+
+.auth-button.secondary {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.auth-button:hover {
+  opacity: 0.85;
+}
+
+/* Clerk authentication controls */
+.auth-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-button {
+  border: none;
+  border-radius: 8px;
+  padding: 9px 15px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.auth-button.primary {
+  background: #111827;
+  color: #ffffff;
+}
+
+.auth-button.secondary {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.auth-button:hover {
+  opacity: 0.86;
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* Fix Clerk authentication button click area */
+.topbar {
+  position: relative;
+  z-index: 100;
+}
+
+.top-actions {
+  position: relative;
+  z-index: 101;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-controls {
+  position: relative;
+  z-index: 102;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.auth-controls > * {
+  pointer-events: auto;
+}
+
+.auth-button {
+  position: relative;
+  z-index: 103;
+  pointer-events: auto !important;
+  cursor: pointer !important;
+}

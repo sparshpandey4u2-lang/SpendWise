@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
+import { UserButton, useAuth, useClerk } from '@clerk/react'
+import { createClerkSupabaseClient } from './supabase'
 import './App.css'
 
 type TransactionType = 'income' | 'expense'
 
 type Transaction = {
-  id: number
+  id: string
   name: string
   category: string
   date: string
@@ -13,30 +15,38 @@ type Transaction = {
 }
 
 type Budget = {
+  id: string
   category: string
   amount: number
 }
 
-const STORAGE_KEY = 'spendwise-transactions'
-const BUDGET_KEY = 'spendwise-budgets'
-const GOAL_KEY = 'spendwise-goal'
-const THEME_KEY = 'spendwise-theme'
-const CURRENCY_KEY = 'spendwise-currency'
+type Goal = {
+  id: string
+  name: string
+  target: number
+  saved: number
+}
+
+type UserSettings = {
+  displayName: string
+  currency: string
+  theme: string
+}
 
 const categories = ['Food', 'Entertainment', 'Transport', 'Shopping', 'Bills', 'Education', 'Health', 'Other']
 
 const initialTransactions: Transaction[] = [
-  { id: 1, name: 'Grocery Shopping', category: 'Food', date: 'Today', amount: 1250, type: 'expense' },
-  { id: 2, name: 'Monthly Allowance', category: 'Income', date: 'Yesterday', amount: 5000, type: 'income' },
-  { id: 3, name: 'Movie Tickets', category: 'Entertainment', date: 'Sep 17', amount: 600, type: 'expense' },
-  { id: 4, name: 'Uber', category: 'Transport', date: 'Sep 16', amount: 320, type: 'expense' },
+  { id: 'demo-1', name: 'Grocery Shopping', category: 'Food', date: 'Today', amount: 1250, type: 'expense' },
+  { id: 'demo-2', name: 'Monthly Allowance', category: 'Income', date: 'Yesterday', amount: 5000, type: 'income' },
+  { id: 'demo-3', name: 'Movie Tickets', category: 'Entertainment', date: 'Sep 17', amount: 600, type: 'expense' },
+  { id: 'demo-4', name: 'Uber', category: 'Transport', date: 'Sep 16', amount: 320, type: 'expense' },
 ]
 
 const initialBudgets: Budget[] = [
-  { category: 'Food', amount: 3000 },
-  { category: 'Entertainment', amount: 2000 },
-  { category: 'Transport', amount: 1500 },
-  { category: 'Shopping', amount: 2000 },
+  { id: 'demo-budget-1', category: 'Food', amount: 3000 },
+  { id: 'demo-budget-2', category: 'Entertainment', amount: 2000 },
+  { id: 'demo-budget-3', category: 'Transport', amount: 1500 },
+  { id: 'demo-budget-4', category: 'Shopping', amount: 2000 },
 ]
 
 function money(value: number, currency: string) {
@@ -52,35 +62,29 @@ function todayLabel() {
 }
 
 function App() {
+  const clerk = useClerk()
+  const { isLoaded, isSignedIn, userId, getToken } = useAuth()
+
+  const supabase = useMemo(
+    () => createClerkSupabaseClient(getToken),
+    [getToken]
+  )
+
   const [page, setPage] = useState('Dashboard')
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (!saved) return initialTransactions
-    try {
-      return JSON.parse(saved)
-    } catch {
-      return initialTransactions
-    }
-  })
+  const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [budgets, setBudgets] = useState<Budget[]>([])
 
-  const [budgets, setBudgets] = useState<Budget[]>(() => {
-    const saved = localStorage.getItem(BUDGET_KEY)
-    if (!saved) return initialBudgets
-    try {
-      return JSON.parse(saved)
-    } catch {
-      return initialBudgets
-    }
-  })
-
-  const [goal, setGoal] = useState(() => localStorage.getItem(GOAL_KEY) || '10000')
-  const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || 'light')
-  const [currency, setCurrency] = useState(() => localStorage.getItem(CURRENCY_KEY) || 'INR')
-  const [displayName, setDisplayName] = useState(() => localStorage.getItem('spendwise-name') || 'Master')
+  const [goal, setGoal] = useState<Goal | null>(null)
+  const [goalTarget, setGoalTarget] = useState('10000')
+  const [goalLoaded, setGoalLoaded] = useState(false)
+  const [theme, setTheme] = useState('light')
+  const [currency, setCurrency] = useState('INR')
+  const [displayName, setDisplayName] = useState('Master')
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
 
   const [showModal, setShowModal] = useState(false)
   const [modalType, setModalType] = useState<TransactionType>('expense')
-  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [amount, setAmount] = useState('')
   const [category, setCategory] = useState('Food')
@@ -92,29 +96,182 @@ function App() {
   const [sortBy, setSortBy] = useState('newest')
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions))
-  }, [transactions])
+    if (!isLoaded || !isSignedIn || !userId) {
+      setTransactions([])
+      return
+    }
+
+    const loadTransactions = async () => {
+      const { data, error } = await supabase
+        .from('transactions')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Failed to load transactions:', error)
+        return
+      }
+
+      setTransactions((data ?? []).map(row => ({
+        id: row.id,
+        name: row.title,
+        category: row.category,
+        date: row.date,
+        amount: Number(row.amount),
+        type: row.type as TransactionType,
+      })))
+    }
+
+    loadTransactions()
+  }, [isLoaded, isSignedIn, userId, supabase])
 
   useEffect(() => {
-    localStorage.setItem(BUDGET_KEY, JSON.stringify(budgets))
-  }, [budgets])
+    if (!isLoaded || !isSignedIn || !userId) {
+      setBudgets([])
+      return
+    }
+
+    const loadBudgets = async () => {
+      const { data, error } = await supabase
+        .from('budgets')
+        .select('*')
+        .order('created_at', { ascending: true })
+
+      if (error) {
+        console.error('Failed to load budgets:', error)
+        return
+      }
+
+      setBudgets((data ?? []).map(row => ({
+        id: row.id,
+        category: row.category,
+        amount: Number(row.amount),
+      })))
+    }
+
+    loadBudgets()
+  }, [isLoaded, isSignedIn, userId, supabase])
 
   useEffect(() => {
-    localStorage.setItem(GOAL_KEY, goal)
-  }, [goal])
+    if (!isLoaded || !isSignedIn || !userId) {
+      setGoal(null)
+      setGoalTarget('10000')
+      setGoalLoaded(false)
+      return
+    }
+
+    const loadGoal = async () => {
+      const { data, error } = await supabase
+        .from('goals')
+        .select('*')
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+
+      if (error) {
+        console.error('Failed to load goal:', error)
+        return
+      }
+
+      if (!data) {
+        const { data: created, error: createError } = await supabase
+          .from('goals')
+          .insert({ user_id: userId, name: 'Savings Goal', target: 10000, saved: 0 })
+          .select()
+          .single()
+
+        if (createError) {
+          console.error('Failed to create goal:', createError)
+          return
+        }
+
+        setGoal({ id: created.id, name: created.name, target: Number(created.target), saved: Number(created.saved) })
+        setGoalTarget(String(created.target))
+        setGoalLoaded(true)
+        return
+      }
+
+      setGoal({ id: data.id, name: data.name, target: Number(data.target), saved: Number(data.saved) })
+      setGoalTarget(String(data.target))
+      setGoalLoaded(true)
+    }
+
+    loadGoal()
+  }, [isLoaded, isSignedIn, userId, supabase])
 
   useEffect(() => {
-    localStorage.setItem(THEME_KEY, theme)
+    if (!isLoaded || !isSignedIn || !userId) {
+      setSettingsLoaded(false)
+      return
+    }
+
+    const loadSettings = async () => {
+      const { data, error } = await supabase
+        .from('user_settings')
+        .select('*')
+        .eq('user_id', userId)
+        .maybeSingle()
+
+      if (error) {
+        console.error('Failed to load settings:', error)
+        return
+      }
+
+      if (!data) {
+        const defaults: UserSettings = { displayName: 'Master', currency: 'INR', theme: 'light' }
+        const { error: createError } = await supabase
+          .from('user_settings')
+          .insert({
+            user_id: userId,
+            display_name: defaults.displayName,
+            currency: defaults.currency,
+            theme: defaults.theme,
+          })
+
+        if (createError) {
+          console.error('Failed to create settings:', createError)
+          return
+        }
+
+        setDisplayName(defaults.displayName)
+        setCurrency(defaults.currency)
+        setTheme(defaults.theme)
+      } else {
+        setDisplayName(data.display_name || 'Master')
+        setCurrency(data.currency || 'INR')
+        setTheme(data.theme || 'light')
+      }
+
+      setSettingsLoaded(true)
+    }
+
+    loadSettings()
+  }, [isLoaded, isSignedIn, userId, supabase])
+
+  useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
 
   useEffect(() => {
-    localStorage.setItem(CURRENCY_KEY, currency)
-  }, [currency])
+    if (!settingsLoaded || !userId || !isSignedIn) return
 
-  useEffect(() => {
-    localStorage.setItem('spendwise-name', displayName)
-  }, [displayName])
+    const timer = window.setTimeout(async () => {
+      const { error } = await supabase
+        .from('user_settings')
+        .upsert({
+          user_id: userId,
+          display_name: displayName.trim() || 'Master',
+          currency,
+          theme,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id' })
+
+      if (error) console.error('Failed to save settings:', error)
+    }, 350)
+
+    return () => window.clearTimeout(timer)
+  }, [displayName, currency, theme, settingsLoaded, userId, isSignedIn, supabase])
+
 
   const totalIncome = useMemo(
     () => transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0),
@@ -127,6 +284,50 @@ function App() {
   )
 
   const balance = totalIncome - totalExpenses
+
+  useEffect(() => {
+    if (!goalLoaded || !isSignedIn || !userId) return
+    const target = Number(goalTarget)
+    if (!Number.isFinite(target) || target < 0) return
+
+    const saved = Math.max(balance, 0)
+
+    const timer = window.setTimeout(async () => {
+      if (!goal) {
+        const { data, error } = await supabase
+          .from('goals')
+          .insert({ user_id: userId, name: 'Savings Goal', target, saved })
+          .select()
+          .single()
+
+        if (error) {
+          console.error('Failed to create goal:', error)
+          return
+        }
+
+        setGoal({ id: data.id, name: data.name, target: Number(data.target), saved: Number(data.saved) })
+        return
+      }
+
+      if (Math.abs(goal.target - target) < 0.001 && Math.abs(goal.saved - saved) < 0.001) return
+
+      const { data, error } = await supabase
+        .from('goals')
+        .update({ target, saved, name: goal.name })
+        .eq('id', goal.id)
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Failed to save goal:', error)
+        return
+      }
+
+      setGoal({ id: data.id, name: data.name, target: Number(data.target), saved: Number(data.saved) })
+    }, 350)
+
+    return () => window.clearTimeout(timer)
+  }, [goal, goalTarget, balance, goalLoaded, isSignedIn, userId, supabase])
 
   const categoryTotals = useMemo(() => {
     return categories.map(cat => ({
@@ -151,7 +352,7 @@ function App() {
       if (sortBy === 'amount-high') return b.amount - a.amount
       if (sortBy === 'amount-low') return a.amount - b.amount
       if (sortBy === 'name') return a.name.localeCompare(b.name)
-      return b.id - a.id
+      return transactions.indexOf(b) - transactions.indexOf(a)
     })
   }, [transactions, search, filterType, filterCategory, sortBy])
 
@@ -179,7 +380,7 @@ function App() {
     setShowModal(true)
   }
 
-  const saveTransaction = () => {
+  const saveTransaction = async () => {
     const numericAmount = Number(amount)
 
     if (!name.trim()) {
@@ -192,61 +393,167 @@ function App() {
       return
     }
 
+    if (!isLoaded || !isSignedIn || !userId) {
+      setError('Please sign in first.')
+      return
+    }
+
     if (editingId !== null) {
-      setTransactions(current =>
-        current.map(t =>
-          t.id === editingId
-            ? {
-                ...t,
-                name: name.trim(),
-                amount: numericAmount,
-                category: modalType === 'income' ? 'Income' : category,
-              }
-            : t
-        )
-      )
-    } else {
-      setTransactions(current => [
-        {
-          id: Date.now(),
-          name: name.trim(),
+      const { data, error } = await supabase
+        .from('transactions')
+        .update({
+          title: name.trim(),
+          amount: numericAmount,
           category: modalType === 'income' ? 'Income' : category,
-          date: todayLabel(),
+          type: modalType,
+        })
+        .eq('id', editingId)
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Failed to update transaction:', error)
+        setError('Could not save transaction.')
+        return
+      }
+
+      setTransactions(current => current.map(t =>
+        t.id === editingId
+          ? {
+              id: data.id,
+              name: data.title,
+              category: data.category,
+              date: data.date,
+              amount: Number(data.amount),
+              type: data.type as TransactionType,
+            }
+          : t
+      ))
+    } else {
+      const { data, error } = await supabase
+        .from('transactions')
+        .insert({
+          user_id: userId,
+          title: name.trim(),
           amount: numericAmount,
           type: modalType,
-        },
-        ...current,
-      ])
+          category: modalType === 'income' ? 'Income' : category,
+          date: todayLabel(),
+        })
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Failed to add transaction:', error)
+        setError('Could not add transaction.')
+        return
+      }
+
+      setTransactions(current => [{
+        id: data.id,
+        name: data.title,
+        category: data.category,
+        date: data.date,
+        amount: Number(data.amount),
+        type: data.type as TransactionType,
+      }, ...current])
     }
 
     setShowModal(false)
   }
 
-  const deleteTransaction = (id: number) => {
-    if (window.confirm('Delete this transaction?')) {
-      setTransactions(current => current.filter(t => t.id !== id))
+  const deleteTransaction = async (id: string) => {
+    if (!window.confirm('Delete this transaction?')) return
+
+    const { error } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      console.error('Failed to delete transaction:', error)
+      window.alert('Could not delete transaction.')
+      return
     }
+
+    setTransactions(current => current.filter(t => t.id !== id))
   }
 
-  const addOrUpdateBudget = () => {
-    const cat = prompt('Budget category:', 'Food')
-    if (!cat) return
-    const value = Number(prompt(`Monthly budget for ${cat}:`, '2000'))
+  const addOrUpdateBudget = async () => {
+    const catInput = window.prompt('Budget category:', 'Food')
+    if (!catInput?.trim()) return
+    const cat = catInput.trim()
+
+    const value = Number(window.prompt(`Monthly budget for ${cat}:`, '2000'))
     if (!Number.isFinite(value) || value <= 0) return
 
-    setBudgets(current => {
-      const exists = current.some(b => b.category.toLowerCase() === cat.toLowerCase())
-      if (exists) {
-        return current.map(b =>
-          b.category.toLowerCase() === cat.toLowerCase() ? { ...b, amount: value } : b
-        )
+    if (!isLoaded || !isSignedIn || !userId) {
+      window.alert('Please sign in first.')
+      return
+    }
+
+    const existing = budgets.find(
+      b => b.category.toLowerCase() === cat.toLowerCase()
+    )
+
+    if (existing) {
+      const { data, error } = await supabase
+        .from('budgets')
+        .update({ amount: value, category: existing.category })
+        .eq('id', existing.id)
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Failed to update budget:', error)
+        window.alert('Could not update budget.')
+        return
       }
-      return [...current, { category: cat, amount: value }]
-    })
+
+      setBudgets(current => current.map(b =>
+        b.id === existing.id
+          ? { id: data.id, category: data.category, amount: Number(data.amount) }
+          : b
+      ))
+      return
+    }
+
+    const { data, error } = await supabase
+      .from('budgets')
+      .insert({ user_id: userId, category: cat, amount: value })
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Failed to add budget:', error)
+      window.alert('Could not add budget.')
+      return
+    }
+
+    setBudgets(current => [...current, {
+      id: data.id,
+      category: data.category,
+      amount: Number(data.amount),
+    }])
   }
 
-  const deleteBudget = (cat: string) => {
-    setBudgets(current => current.filter(b => b.category !== cat))
+  const deleteBudget = async (id: string) => {
+    const budget = budgets.find(b => b.id === id)
+    if (!budget) return
+    if (!window.confirm(`Delete the ${budget.category} budget?`)) return
+
+    const { error } = await supabase
+      .from('budgets')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      console.error('Failed to delete budget:', error)
+      window.alert('Could not delete budget.')
+      return
+    }
+
+    setBudgets(current => current.filter(b => b.id !== id))
   }
 
   const exportCSV = () => {
@@ -267,21 +574,103 @@ function App() {
     URL.revokeObjectURL(url)
   }
 
-  const clearAllData = () => {
-    if (!window.confirm('This will delete all local SpendWise data. Continue?')) return
+  const clearAllData = async () => {
+    if (!isLoaded || !isSignedIn || !userId) {
+      window.alert('Please sign in first.')
+      return
+    }
+
+    if (!window.confirm('Delete all your transactions, budgets and savings goal? This cannot be undone.')) return
+
+    const [transactionsResult, budgetsResult, goalsResult] = await Promise.all([
+      supabase.from('transactions').delete().eq('user_id', userId),
+      supabase.from('budgets').delete().eq('user_id', userId),
+      supabase.from('goals').delete().eq('user_id', userId),
+    ])
+
+    const firstError = transactionsResult.error || budgetsResult.error || goalsResult.error
+    if (firstError) {
+      console.error('Failed to clear data:', firstError)
+      window.alert('Could not clear all data. Please try again.')
+      return
+    }
+
     setTransactions([])
     setBudgets([])
-    setGoal('10000')
+
+    const { data: newGoal, error: goalError } = await supabase
+      .from('goals')
+      .insert({ user_id: userId, name: 'Savings Goal', target: 10000, saved: 0 })
+      .select()
+      .single()
+
+    if (goalError) {
+      console.error('Failed to restore an empty goal:', goalError)
+      setGoal(null)
+      setGoalTarget('10000')
+    } else {
+      setGoal({ id: newGoal.id, name: newGoal.name, target: Number(newGoal.target), saved: Number(newGoal.saved) })
+      setGoalTarget('10000')
+    }
+
+    window.alert('Transactions and budgets have been cleared. Your empty savings goal was reset.')
   }
 
-  const resetApp = () => {
-    if (!window.confirm('Reset SpendWise to the original demo data?')) return
-    setTransactions(initialTransactions)
-    setBudgets(initialBudgets)
-    setGoal('10000')
+  const resetApp = async () => {
+    if (!isLoaded || !isSignedIn || !userId) {
+      window.alert('Please sign in first.')
+      return
+    }
+
+    if (!window.confirm('Reset your SpendWise account to clean demo data?')) return
+
+    const [deleteTransactions, deleteBudgets, deleteGoals] = await Promise.all([
+      supabase.from('transactions').delete().eq('user_id', userId),
+      supabase.from('budgets').delete().eq('user_id', userId),
+      supabase.from('goals').delete().eq('user_id', userId),
+    ])
+
+    const deleteError = deleteTransactions.error || deleteBudgets.error || deleteGoals.error
+    if (deleteError) {
+      console.error('Failed to reset app:', deleteError)
+      window.alert('Could not reset the app. Please try again.')
+      return
+    }
+
+    const demoTransactions = initialTransactions.map(t => ({
+      user_id: userId, title: t.name, amount: t.amount, type: t.type, category: t.category, date: t.date,
+    }))
+    const demoBudgets = initialBudgets.map(b => ({
+      user_id: userId, category: b.category, amount: b.amount,
+    }))
+
+    const [transactionInsert, budgetInsert, goalInsert] = await Promise.all([
+      supabase.from('transactions').insert(demoTransactions),
+      supabase.from('budgets').insert(demoBudgets),
+      supabase.from('goals').insert({ user_id: userId, name: 'Savings Goal', target: 10000, saved: 0 }).select().single(),
+    ])
+
+    const insertError = transactionInsert.error || budgetInsert.error || goalInsert.error
+    if (insertError) {
+      console.error('Failed to restore demo data:', insertError)
+      window.alert('The reset did not finish completely. Refresh and check your data.')
+      return
+    }
+
+    setTransactions((transactionInsert.data ?? []).map(row => ({
+      id: row.id, name: row.title, category: row.category, date: row.date, amount: Number(row.amount), type: row.type as TransactionType,
+    })))
+    setBudgets((budgetInsert.data ?? []).map(row => ({
+      id: row.id, category: row.category, amount: Number(row.amount),
+    })))
+    if (goalInsert.data) {
+      setGoal({ id: goalInsert.data.id, name: goalInsert.data.name, target: Number(goalInsert.data.target), saved: Number(goalInsert.data.saved) })
+    }
+    setGoalTarget('10000')
     setDisplayName('Master')
     setTheme('light')
     setCurrency('INR')
+    window.alert('SpendWise has been reset to the demo data.')
   }
 
   const navItems = [
@@ -334,10 +723,30 @@ function App() {
             <h1>{page}</h1>
           </div>
           <div className="top-actions">
-            <button className="icon-button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
+            <button
+              className="icon-button"
+              onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+              aria-label="Toggle theme"
+            >
               {theme === 'light' ? '☾' : '☀'}
             </button>
-            <div className="avatar">{displayName.charAt(0).toUpperCase()}</div>
+
+            <div className="auth-controls">
+              {!isLoaded ? (
+                <span className="auth-loading">Loading...</span>
+              ) : isSignedIn ? (
+                <UserButton />
+              ) : (
+                <>
+                  <button type="button" className="auth-button secondary" onClick={() => clerk.openSignIn({})}>Sign In</button>
+                  <button type="button" className="auth-button primary" onClick={() => clerk.openSignUp({})}>Sign Up</button>
+                </>
+              )}
+            </div>
+
+            {!isSignedIn && (
+              <div className="avatar">{displayName.charAt(0).toUpperCase()}</div>
+            )}
           </div>
         </header>
 
@@ -403,7 +812,8 @@ function App() {
             currency={currency}
             balance={balance}
             goal={goal}
-            setGoal={setGoal}
+            goalTarget={goalTarget}
+            setGoalTarget={setGoalTarget}
           />
         )}
 
@@ -427,8 +837,8 @@ function App() {
           <div className="modal" onMouseDown={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <p className="eyebrow">{editingId ? 'Edit transaction' : 'New transaction'}</p>
-                <h2>{editingId ? 'Edit transaction' : `Add ${modalType}`}</h2>
+                <p className="eyebrow">{editingId !== null ? 'Edit transaction' : 'New transaction'}</p>
+                <h2>{editingId !== null ? 'Edit transaction' : `Add ${modalType}`}</h2>
               </div>
               <button className="close-button" onClick={() => setShowModal(false)}>×</button>
             </div>
@@ -456,7 +866,7 @@ function App() {
             {error && <div className="error">{error}</div>}
 
             <button className="primary-button full" onClick={saveTransaction}>
-              {editingId ? 'Save changes' : `Add ${modalType}`}
+              {editingId !== null ? 'Save changes' : `Add ${modalType}`}
             </button>
           </div>
         </div>
@@ -479,7 +889,7 @@ function Dashboard(props: {
   maxCategoryTotal: number
   openAdd: (type: TransactionType) => void
   openEdit: (t: Transaction) => void
-  deleteTransaction: (id: number) => void
+  deleteTransaction: (id: string) => void
   goTransactions: () => void
 }) {
   const {
@@ -561,7 +971,7 @@ function StatCard({ label, value, note, icon, positive = false }: { label: strin
   )
 }
 
-function TransactionList({ transactions, currency, openEdit, deleteTransaction }: { transactions: Transaction[]; currency: string; openEdit: (t: Transaction) => void; deleteTransaction: (id: number) => void }) {
+function TransactionList({ transactions, currency, openEdit, deleteTransaction }: { transactions: Transaction[]; currency: string; openEdit: (t: Transaction) => void; deleteTransaction: (id: string) => void }) {
   if (!transactions.length) return <Empty text="No transactions yet." />
   return (
     <div className="transaction-list">
@@ -591,7 +1001,7 @@ function TransactionsPage(props: {
   setSortBy: (v: string) => void
   openAdd: (type: TransactionType) => void
   openEdit: (t: Transaction) => void
-  deleteTransaction: (id: number) => void
+  deleteTransaction: (id: string) => void
 }) {
   return (
     <div className="content">
@@ -619,7 +1029,7 @@ function TransactionsPage(props: {
   )
 }
 
-function BudgetsPage({ currency, budgets, transactions, addOrUpdateBudget, deleteBudget }: { currency: string; budgets: Budget[]; transactions: Transaction[]; addOrUpdateBudget: () => void; deleteBudget: (c: string) => void }) {
+function BudgetsPage({ currency, budgets, transactions, addOrUpdateBudget, deleteBudget }: { currency: string; budgets: Budget[]; transactions: Transaction[]; addOrUpdateBudget: () => void; deleteBudget: (id: string) => void }) {
   const totalBudget = budgets.reduce((s, b) => s + b.amount, 0)
   const totalSpent = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
 
@@ -639,7 +1049,7 @@ function BudgetsPage({ currency, budgets, transactions, addOrUpdateBudget, delet
           const percent = b.amount ? Math.min((spent / b.amount) * 100, 100) : 0
           return (
             <div className="budget-card" key={b.category}>
-              <div className="panel-heading"><div><h3>{b.category}</h3><p>{money(spent, currency)} spent</p></div><button className="tiny-button danger" onClick={() => deleteBudget(b.category)}>Delete</button></div>
+              <div className="panel-heading"><div><h3>{b.category}</h3><p>{money(spent, currency)} spent</p></div><button className="tiny-button danger" onClick={() => deleteBudget(b.id)}>Delete</button></div>
               <div className="large-progress"><i style={{ width: `${percent}%` }} /></div>
               <div className="budget-meta"><span>{Math.round(percent)}% used</span><strong>{money(b.amount, currency)}</strong></div>
             </div>
@@ -680,22 +1090,23 @@ function AnalyticsPage({ currency, transactions, categoryTotals, maxCategoryTota
   )
 }
 
-function GoalsPage({ currency, balance, goal, setGoal }: { currency: string; balance: number; goal: string; setGoal: (v: string) => void }) {
-  const target = Number(goal) || 0
-  const percent = target ? Math.min(Math.max((Math.max(balance, 0) / target) * 100, 0), 100) : 0
+function GoalsPage({ currency, balance, goal, goalTarget, setGoalTarget }: { currency: string; balance: number; goal: Goal | null; goalTarget: string; setGoalTarget: (v: string) => void }) {
+  const target = Number(goalTarget) || 0
+  const saved = Math.max(balance, 0)
+  const percent = target ? Math.min(Math.max((saved / target) * 100, 0), 100) : 0
 
   return (
     <div className="content">
-      <section className="page-actions"><div><h2>Savings goal</h2><p>Track progress toward a target.</p></div></section>
+      <section className="page-actions"><div><h2>Savings goal</h2><p>Track progress toward a target saved securely in your account.</p></div></section>
       <section className="goal-card">
         <div className="goal-icon">◎</div>
-        <div className="goal-copy"><span>Current balance</span><strong>{money(Math.max(balance, 0), currency)}</strong><p>Goal: {money(target, currency)}</p></div>
+        <div className="goal-copy"><span>Current balance</span><strong>{money(saved, currency)}</strong><p>{goal?.name || 'Savings Goal'}: {money(target, currency)}</p></div>
         <div className="goal-percent">{Math.round(percent)}%</div>
       </section>
       <section className="panel">
         <h3>Set your target</h3>
-        <p className="muted">This local version calculates progress from your current balance.</p>
-        <div className="goal-form"><input type="number" min="0" value={goal} onChange={e => setGoal(e.target.value)} /><span>{currency}</span></div>
+        <p className="muted">Your goal target is stored in Supabase and linked to your account.</p>
+        <div className="goal-form"><input type="number" min="0" value={goalTarget} onChange={e => setGoalTarget(e.target.value)} /><span>{currency}</span></div>
         <div className="large-progress"><i style={{ width: `${percent}%` }} /></div>
       </section>
     </div>
@@ -705,7 +1116,7 @@ function GoalsPage({ currency, balance, goal, setGoal }: { currency: string; bal
 function SettingsPage({ displayName, setDisplayName, currency, setCurrency, theme, setTheme, exportCSV, clearAllData, resetApp }: { displayName: string; setDisplayName: (v: string) => void; currency: string; setCurrency: (v: string) => void; theme: string; setTheme: (v: string) => void; exportCSV: () => void; clearAllData: () => void; resetApp: () => void }) {
   return (
     <div className="content">
-      <section className="page-actions"><div><h2>Settings</h2><p>Customize your local SpendWise experience.</p></div></section>
+      <section className="page-actions"><div><h2>Settings</h2><p>Customize your SpendWise experience.</p></div></section>
       <div className="settings-grid">
         <section className="panel settings-card">
           <h3>Profile</h3>
@@ -720,7 +1131,7 @@ function SettingsPage({ displayName, setDisplayName, currency, setCurrency, them
         </section>
         <section className="panel settings-card">
           <h3>Data</h3>
-          <p className="muted">Everything in this version is stored only in this browser using localStorage.</p>
+          <p className="muted">Your transactions, budgets, savings goal and preferences are securely stored in your Supabase account.</p>
           <button className="secondary-button full" onClick={exportCSV}>↓ Export transactions CSV</button>
           <button className="danger-button full" onClick={clearAllData}>Clear all data</button>
           <button className="secondary-button full" onClick={resetApp}>Reset demo data</button>
